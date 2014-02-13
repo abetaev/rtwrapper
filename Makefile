@@ -7,7 +7,7 @@ LIBS=-lnetlink -ldl
 rtwrapper.so: rtwrapper.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
-rtwrapper: rtwrapper.c
+rtwrapper: rtwrapper.c ll_map.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIBS)
 
 clean:

@@ -17,8 +17,8 @@
 #include <linux/in_route.h>
 #include <linux/sockios.h>
 
+#include "ll_map.h"
 
-static struct rtnl_handle rth = { .fd = -1 };
 
 static int (*real_ioctl)(int, unsigned long, void*);
 
@@ -41,6 +41,19 @@ void sockaddr2rta(struct rta_addr * rta, struct sockaddr * sa) {
 	puts("");
 }
 
+__u8 sockaddr2len(struct sockaddr * sa) {
+    struct sockaddr_in * sa_in = (struct sockaddr_in *) sa;
+    __u32 addr = sa_in->sin_addr.s_addr;
+    __u32 i = 1;
+    __u8 c = 0;
+    int maxlen = (sizeof(addr) * 8);
+    while ((addr & i) && c < maxlen) {
+        c ++;
+        i <<= 1;
+    }
+    return c;
+}
+
 int route_modify(int cmd, int flags, struct rtentry *rte) {
 
 	struct rtnl_handle rth;
@@ -55,17 +68,16 @@ int route_modify(int cmd, int flags, struct rtentry *rte) {
     req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
     req.n.nlmsg_flags = NLM_F_REQUEST | flags;
     req.n.nlmsg_type = cmd;
-    //req.r.rtm_family = AF_INET;
     req.r.rtm_family = rte->rt_dst.sa_family;
-    req.r.rtm_table = RT_TABLE_MAIN;
     req.r.rtm_table = 128;
     req.r.rtm_protocol = RTPROT_BOOT;
     req.r.rtm_scope = RT_SCOPE_UNIVERSE;
     req.r.rtm_type = RTN_UNICAST;
-	req.r.rtm_table = RT_TABLE_MAIN;
-	req.r.rtm_dst_len = 32;
+	req.r.rtm_dst_len = sockaddr2len(&(rte->rt_genmask));
 
-	struct rta_addr rta_dst_addr;
+    int dev = ll_name_to_index(rte->rt_dev);
+
+    struct rta_addr rta_dst_addr;
 	struct rta_addr rta_gw_addr;
 
 	sockaddr2rta(&rta_dst_addr, &(rte->rt_dst));
@@ -73,31 +85,19 @@ int route_modify(int cmd, int flags, struct rtentry *rte) {
 
 	addattr_l(&req.n, sizeof(req), RTA_DST, rta_dst_addr.addr, rta_dst_addr.len);
     addattr_l(&req.n, sizeof(req), RTA_GATEWAY, rta_gw_addr.addr, rta_gw_addr.len);
-/*
-    printf("family: %i\n", req.r.rtm_family);
-    printf("scope: %i\n", req.r.rtm_scope);
-    printf("table: %i\n", req.r.rtm_table);
-    printf("protocol: %i\n", req.r.rtm_protocol);
-    printf("type: %i\n", req.r.rtm_type);
-    printf("dlen: %i\n", req.r.rtm_dst_len);
-    printf("slen: %i\n", req.r.rtm_src_len);
-    printf("tos: %i\n", req.r.rtm_tos);
-    printf("flags: %i\n", req.r.rtm_flags);
-	puts("---");
-    printf("len: %i\n", req.n.nlmsg_len);
-    printf("type: %i\n", req.n.nlmsg_type);
-    printf("flags: %i\n", req.n.nlmsg_flags);
-    printf("pid: %i\n", req.n.nlmsg_pid);
-    printf("seq: %i\n", req.n.nlmsg_seq);
-*/
+    addattr32(&req.n, sizeof(req), RTA_PRIORITY, rte->rt_metric);
+
+
+
+    if (dev != 0)
+        addattr32(&req.n, sizeof(req), RTA_OIF, dev);
+    
 	if (rtnl_open(&rth, 0) < 0 ) {
 		puts("Unable to connect to netlink socket");
 		exit(1);
 	}
     if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0)
-		printf("Error");
-//        exit(2);
-
+		puts("Error talking to netlink");
 
     return 0;
 }
@@ -115,12 +115,6 @@ int ioctl(int fd, unsigned long request, void *arg) {
 
 void init() {
 
-	// open connection to netlink socket
-	if (rtnl_open(&rth, 0) < 0 ) {
-		puts("Unable to connect to netlink socket");
-		exit(1);
-	}
-
 	// get original ioctl function ptr
 	real_ioctl = dlsym(RTLD_NEXT, "ioctl");
     if (real_ioctl == NULL) {
@@ -131,13 +125,5 @@ void init() {
 }
 
 void dispose() {
-	rtnl_close(&rth);
 }
 
-int main(int argc, char * argv[]) {
-	init();
-	//route_modify(RTM_NEWROUTE, NLM_F_CREATE|NLM_F_EXCL, );
-	dispose();
-
-	return 0;
-}
