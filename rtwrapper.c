@@ -22,23 +22,14 @@
 
 static int (*real_ioctl)(int, unsigned long, void*);
 
+static struct rtnl_handle rth = { .fd = -1 };
+
 void init() __attribute__((constructor));
 
 void dispose() __attribute__((destructor));
 
-struct rta_addr {
-	__u32 addr[8];
-	int len;
-};
-
-void sockaddr2rta(struct rta_addr * rta, struct sockaddr * sa) {
-	struct sockaddr_in * sa_in = (struct sockaddr_in *) sa;
-	rta->addr[0] = sa_in->sin_addr.s_addr;
-	rta->len = 4;
-	for (int i = 0; i < rta->len; i ++) {
-		printf("%i ", ((unsigned char*) (&rta->addr))[i]);
-	}
-	puts("");
+__u32 sockaddr2rta(struct sockaddr * sa) {
+	return ((struct sockaddr_in *) sa)->sin_addr.s_addr;
 }
 
 __u8 sockaddr2len(struct sockaddr * sa) {
@@ -55,8 +46,6 @@ __u8 sockaddr2len(struct sockaddr * sa) {
 }
 
 int route_modify(int cmd, int flags, struct rtentry *rte) {
-
-	struct rtnl_handle rth;
 
     struct {
         struct nlmsghdr     n;
@@ -77,25 +66,13 @@ int route_modify(int cmd, int flags, struct rtentry *rte) {
 
     int dev = ll_name_to_index(rte->rt_dev);
 
-    struct rta_addr rta_dst_addr;
-	struct rta_addr rta_gw_addr;
-
-	sockaddr2rta(&rta_dst_addr, &(rte->rt_dst));
-	sockaddr2rta(&rta_gw_addr, &(rte->rt_gateway));
-
-	addattr_l(&req.n, sizeof(req), RTA_DST, rta_dst_addr.addr, rta_dst_addr.len);
-    addattr_l(&req.n, sizeof(req), RTA_GATEWAY, rta_gw_addr.addr, rta_gw_addr.len);
+	addattr32(&req.n, sizeof(req), RTA_DST, sockaddr2rta(&(rte->rt_dst)));
+    addattr32(&req.n, sizeof(req), RTA_GATEWAY, sockaddr2rta(&(rte->rt_gateway)));
     addattr32(&req.n, sizeof(req), RTA_PRIORITY, rte->rt_metric);
-
-
 
     if (dev != 0)
         addattr32(&req.n, sizeof(req), RTA_OIF, dev);
-    
-	if (rtnl_open(&rth, 0) < 0 ) {
-		puts("Unable to connect to netlink socket");
-		exit(1);
-	}
+
     if (rtnl_talk(&rth, &req.n, 0, 0, NULL) < 0)
 		puts("Error talking to netlink");
 
@@ -109,7 +86,7 @@ int ioctl(int fd, unsigned long request, void *arg) {
 	case SIOCDELRT:
 		return route_modify(RTM_DELROUTE, 0, arg);
 	default:
-	    return real_ioctl(fd, request, arg);
+		return real_ioctl(fd, request, arg);
 	}
 }
 
@@ -122,8 +99,18 @@ void init() {
 		exit(3);
     }
 
+	// open netlink connection
+	if (rtnl_open(&rth, 0) < 0 ) {
+		puts("Unable to connect to netlink socket");
+		exit(1);
+	}
+
 }
 
 void dispose() {
+
+	// TODO flush 128 routing table before close
+
+	rtnl_close(&rth);
 }
 
